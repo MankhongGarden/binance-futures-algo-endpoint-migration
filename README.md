@@ -20,7 +20,7 @@ You're hitting `-4120` and using one of these:
 | `freqtrade/freqtrade` | ✅ fixed Dec 2025 · upgrade | [#12610](https://github.com/freqtrade/freqtrade/issues/12610) (+5 reactions · 17 comments) |
 | `nautechsystems/nautilus_trader` | ✅ fixed Dec 2025 · upgrade to ≥1.222 | [#3287](https://github.com/nautechsystems/nautilus_trader/issues/3287) (+3 reactions · 27 comments) |
 | `JKorf/Binance.Net` (.NET) | ✅ fixed v11.x · upgrade | [#1542](https://github.com/JKorf/Binance.Net/issues/1542) |
-| `tiagosiebler/binance` (Node.js) | ❌ **still open · use this guide** | [#609](https://github.com/tiagosiebler/binance/issues/609) (5+ months open · 7 comments) |
+| `tiagosiebler/binance` (Node.js) | ✅ library fixed Dec 2025 · use `submitNewAlgoOrder` / `cancelAlgoOrder` / `cancelAllAlgoOpenOrders` | [#609](https://github.com/tiagosiebler/binance/issues/609) (open · docs example update pending · see [`mr-smit`'s shape](https://github.com/tiagosiebler/binance/issues/609#issuecomment-3636999453)) |
 | `oliver-zehentleitner/unicorn-binance-rest-api` | ✅ fixed | [#93](https://github.com/oliver-zehentleitner/unicorn-binance-rest-api/issues/93) |
 | `QuantConnect/Lean.Brokerages.Binance` | ✅ fixed | [#61](https://github.com/QuantConnect/Lean.Brokerages.Binance/issues/61) |
 | Raw HTTP / custom HMAC code | n/a · this guide is for you | — |
@@ -204,7 +204,7 @@ If you want the full diagnostic thread (or want to add your own data point):
 - [freqtrade/freqtrade#12610](https://github.com/freqtrade/freqtrade/issues/12610) — fix path · 17 comments
 - [nautechsystems/nautilus_trader#3287](https://github.com/nautechsystems/nautilus_trader/issues/3287) — fix path · 27 comments
 - [JKorf/Binance.Net#1542](https://github.com/JKorf/Binance.Net/issues/1542) — .NET fix path
-- [tiagosiebler/binance#609](https://github.com/tiagosiebler/binance/issues/609) — **still open** · Node.js users
+- [tiagosiebler/binance#609](https://github.com/tiagosiebler/binance/issues/609) — Node.js · library fixed (commit `17c8f6f`) · issue stays open for docs/example refresh
 - [oliver-zehentleitner/unicorn-binance-rest-api#93](https://github.com/oliver-zehentleitner/unicorn-binance-rest-api/issues/93)
 - [QuantConnect/Lean.Brokerages.Binance#61](https://github.com/QuantConnect/Lean.Brokerages.Binance/issues/61)
 
