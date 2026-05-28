@@ -6,7 +6,7 @@ On 2025-12-09 Binance silently switched STOP_MARKET, TAKE_PROFIT_MARKET, and oth
 {"code":-4120,"msg":"Order type not supported for this endpoint. Please use the Algo Order API endpoints instead."}
 ```
 
-Six months later (as of 2026-05), [ccxt/ccxt](https://github.com/ccxt/ccxt) still ships no native bindings for the new endpoints, and several other major libraries took weeks to react. This repo is the framework-agnostic recipe — raw HTTP examples that work without any SDK, plus pointers to upstream issues for the SDKs that have or haven't been patched.
+Six months later (as of 2026-05), [ccxt/ccxt](https://github.com/ccxt/ccxt) ships **raw `fapiPrivate*` bindings** for the new endpoints in the abstract layer, but the high-level `createOrder()` REST helper still routes conditional types to the old `/fapi/v1/order` path — i.e. `client.create_order(type="STOP_MARKET", ...)` is still expected to fail with `-4120`. Several other major libraries took weeks to react. This repo is the framework-agnostic recipe — raw HTTP examples that work without any SDK, plus pointers to upstream issues for the SDKs that have or haven't been patched, plus a vendorable [`algo_wrapper.py`](algo_wrapper.py) drop-in module for projects that don't carry ccxt.
 
 > **What this guide is not:** trading strategy advice, SL/TP placement rules, position-management patterns, or anything about *what* to trade. It's pure API-integration plumbing — the mechanical "how do I keep my bot from crashing on -4120" recipe.
 
@@ -16,9 +16,9 @@ You're hitting `-4120` and using one of these:
 
 | Library | Status (as of 2026-05) | Where to look |
 |---|---|---|
-| `ccxt/ccxt` (Python · JS · PHP) | ⚠️ no native bindings · use `fapiPrivate*` private endpoints directly | [#27486](https://github.com/ccxt/ccxt/issues/27486) (closed · OP posted workaround) · [#27474](https://github.com/ccxt/ccxt/issues/27474) |
-| `freqtrade/freqtrade` | ✅ fixed Dec 2025 · upgrade | [#12610](https://github.com/freqtrade/freqtrade/issues/12610) (+5 reactions · 17 comments) |
-| `nautechsystems/nautilus_trader` | ✅ fixed Dec 2025 · upgrade to ≥1.222 | [#3287](https://github.com/nautechsystems/nautilus_trader/issues/3287) (+3 reactions · 27 comments) |
+| `ccxt/ccxt` (Python · JS · PHP) | ⚠️ raw `fapiPrivate*` bindings exist · `createOrder()` REST helper still routes to old endpoint | [#26861](https://github.com/ccxt/ccxt/issues/26861) (closed) · [#27486](https://github.com/ccxt/ccxt/issues/27486) (closed · OP posted workaround) · [#27474](https://github.com/ccxt/ccxt/issues/27474) |
+| `freqtrade/freqtrade` | ✅ fixed Dec 2025 · upgrade | [#12610](https://github.com/freqtrade/freqtrade/issues/12610) (closed · +5 reactions · 17 comments) |
+| `nautechsystems/nautilus_trader` | ✅ fixed Dec 2025 · upgrade to ≥1.222 | [#3287](https://github.com/nautechsystems/nautilus_trader/issues/3287) (closed · +3 reactions · 27 comments) |
 | `JKorf/Binance.Net` (.NET) | ✅ fixed v11.x · upgrade | [#1542](https://github.com/JKorf/Binance.Net/issues/1542) |
 | `tiagosiebler/binance` (Node.js) | ✅ library fixed Dec 2025 · use `submitNewAlgoOrder` / `cancelAlgoOrder` / `cancelAllAlgoOpenOrders` | [#609](https://github.com/tiagosiebler/binance/issues/609) (open · docs example update pending · see [`mr-smit`'s shape](https://github.com/tiagosiebler/binance/issues/609#issuecomment-3636999453)) |
 | `oliver-zehentleitner/unicorn-binance-rest-api` | ✅ fixed | [#93](https://github.com/oliver-zehentleitner/unicorn-binance-rest-api/issues/93) |
@@ -125,9 +125,71 @@ order = create_stop_market(
 print(order["algoId"])   # save this — you need it to cancel later
 ```
 
+## Drop-in stdlib-only module · `algo_wrapper.py`
+
+If you want a vendorable file rather than copy-pasting the snippet above, this repo ships [`algo_wrapper.py`](algo_wrapper.py) — a ~250-line, **zero-dep**, stdlib-only Python module with:
+
+- `create_stop_market(...)` and `create_take_profit_market(...)`
+- `list_open_algo_orders(symbol=None)` for cross-symbol zombie sweeps
+- `cancel_algo_order(symbol, algo_id)`
+- A typed `BinanceAlgoError` that parses Binance's `code`/`msg` so you can branch on `exc.code == -1111` (precision), `-4045` (max-stop-order limit), `-4061` (positionSide mismatch), etc.
+- Mainnet / testnet base-URL switch via `base_url=FAPI_TESTNET`
+
+Vendor the file:
+
+```bash
+curl -O https://raw.githubusercontent.com/MankhongGarden/binance-futures-algo-endpoint-migration/main/algo_wrapper.py
+```
+
+Quick usage:
+
+```python
+from algo_wrapper import create_stop_market, BinanceAlgoError
+
+try:
+    res = create_stop_market(
+        symbol="BTCUSDT",
+        side="SELL",                  # closes a LONG position
+        quantity="0.002",             # string -> avoid float precision drift
+        trigger_price="62000",
+        position_side="LONG",         # "BOTH" if you're in one-way mode
+        client_algo_id="my-bot-sl-42",
+        reduce_only=True,
+        api_key=API_KEY,
+        api_secret=API_SECRET,
+    )
+    algo_id = res["algoId"]           # store this — it's your handle for cancel/list
+except BinanceAlgoError as exc:
+    if exc.code == -1111:
+        # "Precision is over the maximum defined for this asset"
+        # round qty/price via ccxt's amount_to_precision / price_to_precision
+        ...
+    elif exc.code == -4045:
+        # "Reach max stop order limit" — Binance enforces a 10-algo-orders-
+        # per-symbol cap. Sweep zombies before retry.
+        ...
+    raise
+```
+
+Testnet smoke test (round-trip list → place far-away STOP_MARKET → cancel):
+
+```bash
+$env:BINANCE_API_KEY = "..."          # PowerShell; bash: export BINANCE_API_KEY=...
+$env:BINANCE_API_SECRET = "..."
+python examples/dry_run.py --testnet --place
+```
+
+The test places a STOP_MARKET 30% above spot (cannot trigger), confirms it via list, then cancels it. Cost: zero on testnet — but **start on testnet.**
+
 ## CCXT-Python users · use `fapiPrivate*` raw endpoints
 
-CCXT exposes Binance's raw private endpoints as methods even when there's no unified wrapper. The [OP of ccxt/ccxt#27486](https://github.com/ccxt/ccxt/issues/27486) documented this idiom — re-stating here so the recipe is findable without diving into a closed issue:
+CCXT exposes Binance's raw private endpoints as methods even when there's no unified wrapper. As of **2026-05-29**, in `ccxt/ccxt` master:
+
+- The **raw endpoint bindings** are present in the abstract layer (`ts/src/abstract/binance.ts` → `fapiPrivatePostAlgoOrder`, `fapiPrivateGetOpenAlgoOrders`, `fapiPrivateGetAlgoOrder`). You can call them directly via `client.fapi_private_post_algo_order(params)`.
+- The **`pro/binance.ts` WebSocket path** auto-routes conditional orders to `algoOrder.place` / `algoOrder.cancel` when `market.linear && market.swap && isConditional`.
+- The **REST `createOrder()` high-level helper** still routes to `fapiPrivatePostOrder` for conditional types — i.e. `client.create_order(type="STOP_MARKET", ...)` on Python ccxt is still expected to fail with `-4120`. (Verify against the ccxt version you're on; this status will eventually flip.)
+
+The [OP of ccxt/ccxt#27486](https://github.com/ccxt/ccxt/issues/27486) documented this idiom — re-stating here so the recipe is findable without diving into a closed issue:
 
 ```python
 import ccxt.async_support as ccxt
@@ -172,7 +234,27 @@ This is unrelated to `-4120` but tends to surface in the same migration window b
 - The new algo endpoint enforces `triggerPrice` precision **per market's `pricePrecision`**, not per the looser "any-float" tolerance the old endpoint had.
 - If your bot was using a homemade rounder (`round(price, 2)`) instead of CCXT's `price_to_precision`, the old endpoint silently accepted slightly-off values; the new endpoint rejects them.
 
+The natural temptation is to hand-roll a rounder:
+
+```python
+qty = math.floor(qty * 10**decimals) / 10**decimals
+```
+
+IEEE-754 bites: `0.018 * 1000 = 17.999999999999996`, so `math.floor` lands at `17` and you ship `"0.017"`. Or on BTCUSDT where the actual filter ladder is `1e-5` (despite what the metadata's nominal `precision.amount` displays), the same code lands on `0.01799` and Binance rejects with `-1111`.
+
 Fix: use CCXT's `price_to_precision(symbol, price)` for `triggerPrice`, or fetch the market's `filters[].tickSize` from `/fapi/v1/exchangeInfo` and round to that step. **Do not rely on the old loose precision behaviour** — Binance has been tightening this across endpoints for two years.
+
+## Trap #3 · the `-4045` quota (max stop order limit)
+
+Binance enforces **10 algo orders per symbol** by default. Easy to hit if:
+
+- Zombie SLs from crashed bot restarts accumulate.
+- Multiple engines on the same account (hedge mode) share a `(symbol, side)` position bucket and each places its own SL/TP.
+- A trailing-stop loop cancels-then-replaces too aggressively.
+
+The sweep idiom: at engine boot, list all open algos for the symbol, compute the set of `algoId`s your ledger knows about, and cancel everything else. Snapshot algos **before** ledger (so a concurrent place_sl in flight isn't killed), and skip algos created in the last 60 seconds (so a race between "Binance accepted" and "ledger row inserted" doesn't kill a fresh SL).
+
+That sweep pattern is **out of scope for this guide** — it's bot-specific state management, not API plumbing. The API plumbing is what this guide covers.
 
 ## Param mapping reference
 
@@ -189,6 +271,14 @@ Mapping from old `/fapi/v1/order` STOP_MARKET payload to new `/fapi/v1/algoOrder
 | (response) `orderId` | `algoId` | rename · used for fetch/cancel |
 | (response) `status` | `status` | values include `NEW`, `TRIGGERED`, `EXPIRED`, `CANCELED` |
 
+## When to NOT use `algo_wrapper.py`
+
+- **You're on a ccxt version where `client.create_order(type="STOP_MARKET", ...)` already routes correctly.** Use ccxt's high-level API. Re-verify after every ccxt upgrade — the moment ccxt fixes `createOrder`, this module becomes obsolete for that code path.
+- **You're using the WebSocket Pro API** (`ccxt.pro.binance`). It already routes conditional orders via `algoOrder.place` / `algoOrder.cancel`.
+- **You're on coin-margined Futures** (`/dapi/v1/...`). Different base URL, different endpoint paths. This module is USDⓈ-M only.
+- **You're on Spot.** Spot conditional orders weren't part of the 2025-12-09 migration.
+- **You need OCO (one-cancels-other) bracketing.** New algo endpoint shape is different; not covered here.
+
 ## Why didn't Binance announce this louder?
 
 It was in the [official changelog](https://developers.binance.com/docs/derivatives/change-log#2025-11-06) about five weeks before the cutover — but the entry was a one-liner buried under several other 2025-11-06 items. Most bot teams found out at incident time, which is why nine major libraries filed `-4120` bugs within the same 48-hour window.
@@ -199,10 +289,11 @@ The takeaway is the obvious one: **subscribe to the developers.binance.com chang
 
 If you want the full diagnostic thread (or want to add your own data point):
 
-- [ccxt/ccxt#27486](https://github.com/ccxt/ccxt/issues/27486) — Python · workaround in OP body
+- [ccxt/ccxt#26861](https://github.com/ccxt/ccxt/issues/26861) — TS Market via Binance · closed
+- [ccxt/ccxt#27486](https://github.com/ccxt/ccxt/issues/27486) — Python · workaround in OP body · closed
 - [ccxt/ccxt#27474](https://github.com/ccxt/ccxt/issues/27474) — same symptom · 中文
-- [freqtrade/freqtrade#12610](https://github.com/freqtrade/freqtrade/issues/12610) — fix path · 17 comments
-- [nautechsystems/nautilus_trader#3287](https://github.com/nautechsystems/nautilus_trader/issues/3287) — fix path · 27 comments
+- [freqtrade/freqtrade#12610](https://github.com/freqtrade/freqtrade/issues/12610) — fix path · 17 comments · closed
+- [nautechsystems/nautilus_trader#3287](https://github.com/nautechsystems/nautilus_trader/issues/3287) — fix path · 27 comments · closed
 - [JKorf/Binance.Net#1542](https://github.com/JKorf/Binance.Net/issues/1542) — .NET fix path
 - [tiagosiebler/binance#609](https://github.com/tiagosiebler/binance/issues/609) — Node.js · library fixed (commit `17c8f6f`) · issue stays open for docs/example refresh
 - [oliver-zehentleitner/unicorn-binance-rest-api#93](https://github.com/oliver-zehentleitner/unicorn-binance-rest-api/issues/93)
